@@ -11,6 +11,7 @@ import EmojiPicker from './EmojiPicker';
 import MentionDropdown from './MentionDropdown';
 import FilePreview from './FilePreview';
 import fileService from '../../services/fileService';
+import socket from '../../services/socket';
 
 const ChatInput = forwardRef(({
   message = '',
@@ -44,7 +45,8 @@ const ChatInput = forwardRef(({
   const [uploadError, setUploadError] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [mentionPosition, setMentionPosition] = useState({ top: 0, left: 0 });
-
+  const typingTimeoutRef = useRef(null);
+  
   const handleFileValidationAndPreview = useCallback(async (file) => {
     if (!file) return;
 
@@ -114,6 +116,15 @@ const ChatInput = forwardRef(({
         setMessage('');
         setFiles([]);
 
+        // Reset textarea height after submission
+        setTimeout(() => {
+          if (messageInputRef?.current) {
+            messageInputRef.current.style.height = 'auto';
+            messageInputRef.current.style.height = '40px';
+            messageInputRef.current.style.overflowY = 'hidden';
+          }
+        }, 0);
+
       } catch (error) {
         console.error('File submit error:', error);
         setUploadError(error.message);
@@ -124,8 +135,17 @@ const ChatInput = forwardRef(({
         content: message.trim()
       });
       setMessage('');
+      
+      // Reset textarea height after submission
+      setTimeout(() => {
+        if (messageInputRef?.current) {
+          messageInputRef.current.style.height = 'auto';
+          messageInputRef.current.style.height = '40px';
+          messageInputRef.current.style.overflowY = 'hidden';
+        }
+      }, 0);
     }
-  }, [files, message, onSubmit, setMessage]);
+  }, [files, message, onSubmit, setMessage, messageInputRef]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -260,6 +280,16 @@ const ChatInput = forwardRef(({
 
     onMessageChange(e);
 
+    // 타이핑 이벤트 emit
+    socket.emit('typing');
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    typingTimeoutRef.current = setTimeout(() => {
+      socket.emit('stopTyping');
+    }, 1000); // 1초 동안 입력 없으면 stop
+
     if (lastAtSymbol !== -1) {
       const textAfterAt = textBeforeCursor.slice(lastAtSymbol + 1);
       const hasSpaceAfterAt = textAfterAt.includes(' ');
@@ -307,6 +337,11 @@ const ChatInput = forwardRef(({
   }, [message, setMessage, setShowMentionList, messageInputRef]);
 
   const handleKeyDown = useCallback((e) => {
+
+    if (e.nativeEvent.isComposing) {
+      return;
+    }
+    
     if (showMentionList) {
       const participants = getFilteredParticipants(room); // room 객체 전달
       const participantsCount = participants.length;
@@ -343,6 +378,7 @@ const ChatInput = forwardRef(({
           return;
       }
     } else if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.nativeEvent.isComposing) return;
       e.preventDefault();
       if (message.trim() || files.length > 0) {
         handleSubmit(e);
@@ -377,52 +413,85 @@ const ChatInput = forwardRef(({
     let newSelectionStart;
     let newSelectionEnd;
 
-    if (markdown.includes('\n')) {
-      newText = message.substring(0, start) +
-                markdown.replace('\n\n', '\n' + selectedText + '\n') +
-                message.substring(end);
+/* ---------- 1) 코드 블록 ``` ---------- */
+    if (markdown == '```') {
       if (selectedText) {
-        newSelectionStart = start + markdown.split('\n')[0].length + 1;
-        newSelectionEnd = newSelectionStart + selectedText.length;
-        newCursorPos = newSelectionEnd;
+        newText =
+          message.slice(0, start) +
+          '```\n' + selectedText + '\n```' +
+          message.slice(end);
+        newSelectionStart = start + '```\n'.length;
+        newSelectionEnd   = newSelectionStart + selectedText.length;
+        newCursorPos      = newSelectionEnd;
       } else {
-        newCursorPos = start + markdown.indexOf('\n') + 1;
-        newSelectionStart = newCursorPos;
-        newSelectionEnd = newCursorPos;
+        newText =
+          message.slice(0, start) +
+          '```\n\n```' +
+          message.slice(end);
+        newSelectionStart = start + '```\n'.length;
+        newSelectionEnd   = newSelectionStart;
+        newCursorPos      = newSelectionStart;
       }
+    /* ---------- 2) 링크 템플릿 [](url) ---------- */
+    } else if (markdown === '[](url)') {
+      newText           = message.slice(0, start) + markdown + message.slice(end);
+      newSelectionStart = start + 1;   // 커서를 [] 내부로
+      newSelectionEnd   = newSelectionStart;
+      newCursorPos      = newSelectionStart;
+
+    /* ---------- 3) 헤더 ##  ---------- */
+    } else if (markdown === '# ') {
+      newText           = message.slice(0, start) + markdown + selectedText + message.slice(end);
+      newSelectionStart = start + markdown.length;
+      newSelectionEnd   = newSelectionStart + selectedText.length;
+      newCursorPos      = newSelectionEnd;
+
+    /* ---------- 4) 멀티라인 마크다운 ---------- */
+    } else if (markdown.includes('\n')) {
+      const [open, close] = markdown.split('\n');
+      newText =
+        message.slice(0, start) +
+        open + selectedText + close +
+        message.slice(end);
+      if (selectedText) {
+        newSelectionStart = start + open.length;
+        newSelectionEnd   = newSelectionStart + selectedText.length;
+        newCursorPos      = newSelectionEnd;
+      } else {
+        newCursorPos      = start + open.length;
+        newSelectionStart = newCursorPos;
+        newSelectionEnd   = newCursorPos;
+      }
+
+    /* ---------- 5) 토큰 끝이 공백인 경우 (예: "- ") ---------- */
     } else if (markdown.endsWith(' ')) {
-      newText = message.substring(0, start) +
-                markdown + selectedText +
-                message.substring(end);
-      newCursorPos = start + markdown.length + selectedText.length;
+      newText =
+        message.slice(0, start) +
+        markdown + selectedText +
+        message.slice(end);
+      newCursorPos      = start + markdown.length + selectedText.length;
       newSelectionStart = newCursorPos;
-      newSelectionEnd = newCursorPos;
+      newSelectionEnd   = newCursorPos;
+
+    /* ---------- 6) 일반 토큰 (볼드, 이탤릭 등) ---------- */
     } else {
-      newText = message.substring(0, start) +
-                markdown + selectedText + markdown +
-                message.substring(end);
+      newText =
+        message.slice(0, start) +
+        markdown + selectedText + markdown +
+        message.slice(end);
       if (selectedText) {
         newSelectionStart = start + markdown.length;
-        newSelectionEnd = newSelectionStart + selectedText.length;
+        newSelectionEnd   = newSelectionStart + selectedText.length;
       } else {
         newSelectionStart = start + markdown.length;
-        newSelectionEnd = newSelectionStart;
+        newSelectionEnd   = newSelectionStart;
       }
       newCursorPos = newSelectionEnd;
     }
 
     setMessage(newText);
 
-    setTimeout(() => {
-      if (messageInputRef.current) {
-        input.focus();
-        input.setSelectionRange(newSelectionStart, newSelectionEnd);
-        if (selectedText) {
-          input.setSelectionRange(newCursorPos, newCursorPos);
-        }
-      }
-    }, 0);
-  }, [message, setMessage, messageInputRef]);
+  
 
   const handleEmojiSelect = useCallback((emoji) => {
     if (!messageInputRef?.current) return;
@@ -617,6 +686,10 @@ const ChatInput = forwardRef(({
     </>
   );
 });
+
+ChatInput.displayName = 'ChatInput';
+
+export default ChatInput;
 
 ChatInput.displayName = 'ChatInput';
 

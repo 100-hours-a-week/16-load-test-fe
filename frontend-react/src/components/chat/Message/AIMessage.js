@@ -26,11 +26,24 @@ const AIMessage = ({
   }).replace(/\./g, '년').replace(/\s/g, ' ').replace('일 ', '일 ');
 
   // AI 사용자 정보 생성
-  const aiUser = {
-    name: msg.aiType === 'wayneAI' ? 'Wayne AI' : 'Consulting AI',
-    email: msg.aiType === 'wayneAI' ? 'ai@wayne.ai' : 'ai@consulting.ai',
-    avatarInitial: msg.aiType === 'wayneAI' ? 'W' : 'C'
-  };
+  let name, email, avatarInitial;
+  switch (msg.aiType) {
+    case 'consultingAI':
+      name = 'Consulting AI';
+      email = 'ai@consulting.ai';
+      avatarInitial = 'C';
+      break;
+    case 'davinciAI':
+      name = 'Davinci AI';
+      email = 'ai@davinci.ai';
+      avatarInitial = 'D';
+      break;
+    default:
+      name = 'Wayne AI';
+      email = 'ai@wayne.ai';
+      avatarInitial = 'W';
+  }
+  const aiUser = { name, email, avatarInitial };
 
   const renderContent = () => {
     if (isStreaming) {

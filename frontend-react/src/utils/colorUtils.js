@@ -12,6 +12,10 @@ const AI_COLORS = {
   consultingAI: {
     backgroundColor: '#00C853',
     color: '#FFFFFF'
+  },
+  davinciAI: {
+    backgroundColor: '#FF6F00',
+    color: '#FFFFFF'
   }
 };
 
@@ -36,7 +40,7 @@ export const getAIAvatarStyles = (aiName) => {
   }
   
   // 알 수 없는 AI의 경우 기본값 반환
-  return AI_COLORS.wayneAI;
+  return AI_COLORS.davinciAI;
 };
 
 // 이메일로부터 고유한 색상 생성
@@ -56,6 +60,10 @@ export const generateColorFromEmail = (email) => {
   if (email.endsWith('@consulting.ai')) {
     globalColorCache.set(email, AI_COLORS.consultingAI.backgroundColor);
     return AI_COLORS.consultingAI.backgroundColor;
+  }
+  if (email.endsWith('@davinci.ai')) {
+    globalColorCache.set(email, AI_COLORS.davinciAI.backgroundColor);
+    return AI_COLORS.davinciAI.backgroundColor;
   }
 
   // 해시 생성

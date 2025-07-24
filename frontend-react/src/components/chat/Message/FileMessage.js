@@ -30,6 +30,7 @@ const FileMessage = ({
 
   // 서버가 소켓 메시지로 보내준 최종 CloudFront URL을 그대로 사용합니다.
   const previewUrl = msg.file?.url;
+  console.log(previewUrl);
 
   if (!msg?.file) {
     console.error('File data is missing:', msg);
@@ -93,8 +94,6 @@ const FileMessage = ({
   };
 
   const renderImagePreview = (originalname) => {
-
-   
     // previewUrl이 없는 경우(파일 처리 중) 로딩 상태를 보여줍니다.
     if (!previewUrl) {
       return (

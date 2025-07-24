@@ -3,6 +3,7 @@ const Room = require('../models/Room');
 const User = require('../models/User');
 const File = require('../models/File');
 const jwt = require('jsonwebtoken');
+const axios = require('axios');
 const { jwtSecret } = require('../config/keys');
 const redisClient = require('../utils/redisClient');
 const SessionService = require('../services/sessionService');
@@ -50,7 +51,7 @@ module.exports = function(io) {
           .populate('sender', 'name email profileImage')
           .populate({
             path: 'file',
-            select: 'filename originalname mimetype size'
+            select: 'filename originalName mimeType size url'
           })
           .sort({ timestamp: -1 })
           .limit(limit + 1)
@@ -244,15 +245,29 @@ module.exports = function(io) {
     }
   });
   
-  io.on('connection', (socket) => {
+  io.on("connection", (socket) => {
+    let pingTimeout;
+
     logDebug('socket connected', {
       socketId: socket.id,
       userId: socket.user?.id,
       userName: socket.user?.name
     });
 
+    const heartbeat = () => {
+      clearTimeout(pingTimeout);
+      pingTimeout = setTimeout(() => {
+        socket.disconnect(true);
+      }, 30000); // 30초 타임아웃
+    };
+
+    socket.on("ping", () => {
+      socket.emit("pong");
+      heartbeat();
+    });
+
+    // 중복 로그인 감지
     if (socket.user) {
-      // 이전 연결이 있는지 확인
       const previousSocketId = connectedUsers.get(socket.user.id);
       if (previousSocketId && previousSocketId !== socket.id) {
         const previousSocket = io.sockets.sockets.get(previousSocketId);
@@ -275,11 +290,61 @@ module.exports = function(io) {
           }, DUPLICATE_LOGIN_TIMEOUT);
         }
       }
-      
-      // 새로운 연결 정보 저장
+
+      // 새로운 연결 정보 등록
       connectedUsers.set(socket.user.id, socket.id);
     }
 
+    // 기존 연결 성공 정보 전송
+    socket.emit("connect_success", {
+      socketId: socket.id,
+      userId: socket.user?.id,
+      connected: true,
+      timestamp: Date.now(),
+    });
+
+    // 재연결 시 이전 방 복구
+    socket.on("reconnect", async () => {
+      if (socket.user) {
+        const currentRoom = userRooms.get(socket.user.id);
+        if (currentRoom) {
+          socket.join(currentRoom);
+          const room = await Room.findById(currentRoom).populate(
+            "participants",
+            "name email profileImage"
+          );
+          if (room) {
+            socket.emit("joinRoomSuccess", {
+              roomId: currentRoom,
+              participants: room.participants,
+              socketConnected: true,
+            });
+          }
+        }
+      }
+    });
+
+    // 최초 접속 시 방 참여 처리
+    if (socket.user) {
+      const currentRoom = userRooms.get(socket.user.id);
+      if (currentRoom) {
+        socket.join(currentRoom);
+        socket.emit("joinRoomSuccess", {
+          roomId: currentRoom,
+          socketConnected: true,
+        });
+      }
+    }
+
+    // 연결 종료 시 cleanup
+    socket.on("disconnect", () => {
+      if (socket.user?.id) {
+        connectedUsers.delete(socket.user.id);
+      }
+      clearTimeout(pingTimeout);
+      console.log(`User disconnected: ${socket.user?.id}`);
+    });
+    
     // 이전 메시지 로딩 처리 개선
     socket.on('fetchPreviousMessages', async ({ roomId, before }) => {
       const queueKey = `${roomId}:${socket.user.id}`;
@@ -384,6 +449,9 @@ module.exports = function(io) {
         socket.join(roomId);
         userRooms.set(socket.user.id, roomId);
 
+        socket.data.roomId = roomId;
+        socket.data.username = socket.user.name;
+
         // 입장 메시지 생성
         const joinMessage = new Message({
           room: roomId,
@@ -438,6 +506,36 @@ module.exports = function(io) {
       }
     });
     
+
+    // 타이핑 중 이벤트
+    socket.on('typing', (data, callback) => {
+      const { roomId, username } = socket.data;
+      // console.log('[서버] typing 수신:', { roomId, username });
+
+      if (roomId && username) {
+        socket.to(roomId).emit('typing', { username });
+        callback?.({ success: true });
+      } else {
+        // console.warn('[서버] typing 실패 - roomId 또는 username 없음');
+        callback?.({ success: false, message: 'roomId 또는 username 없음' });
+      }
+    });
+
+
+    // 타이핑 멈춤 이벤트
+    socket.on('stopTyping', (data, callback) => {
+      const { roomId, username } = socket.data;
+      // console.log('[서버] stopTyping 수신:', { roomId, username });
+
+      if (roomId && username) {
+        socket.to(roomId).emit('stopTyping', { username });
+        callback?.({ success: true });
+      } else {
+        callback?.({ success: false, message: 'roomId 또는 username 없음' });
+      }
+    });
+
+  
     // 메시지 전송 처리
     socket.on('chatMessage', async (messageData) => {
       try {
@@ -496,7 +594,7 @@ module.exports = function(io) {
 
             const file = await File.findOne({
               _id: fileData._id,
-              user: socket.user.id
+              user: socket.user.id,
             });
 
             if (!file) {
@@ -512,9 +610,9 @@ module.exports = function(io) {
               timestamp: new Date(),
               reactions: {},
               metadata: {
-                fileType: file.mimetype,
+                fileType: file.mimeType,
                 fileSize: file.size,
-                originalName: file.originalname
+                originalName: file.originalName
               }
             });
             break;
@@ -551,6 +649,13 @@ module.exports = function(io) {
         if (aiMentions.length > 0) {
           for (const ai of aiMentions) {
             const query = content.replace(new RegExp(`@${ai}\\b`, 'g'), '').trim();
+            if (ai === 'davinciAI') {
+              const drawingPayload = await aiService.createDrawingPrompt(query);
+              console.log('drawingPayload:', drawingPayload.promptText);
+              const img_url = await aiService.genimg(drawingPayload);
+              sendAIImageAsFileNoUpload(io, room, 'davinciAI', img_url);
+              break;
+            }
             await handleAIResponse(io, room, ai, query);
           }
         }
@@ -648,6 +753,8 @@ module.exports = function(io) {
         });
       }
     });
+
+    
     
     // 연결 해제 처리
     socket.on('disconnect', async (reason) => {
@@ -817,15 +924,173 @@ module.exports = function(io) {
         });
       }
     });
+
+
+    // socket.on('fileUploadComplete', async (data) => {
+    //   const { fileId, roomId, content } = data;
+    //   const userId = socket.user.id;
+
+    //   let tempMessageId = null;
+
+    //   try {
+    //     const file = await File.findById(fileId);
+    //     if (!file || file.uploader.toString() !== userId) {
+    //       socket.emit('error', { message: '파일 처리 권한이 없습니다.' });
+    //       return;
+    //     }
+
+    //     // 1. "처리 중" 상태의 임시 메시지를 먼저 생성하고 클라이언트에 전송합니다.
+    //     const tempMessage = new Message({
+    //       room: roomId,
+    //       sender: userId,
+    //       type: 'file',
+    //       content: content || '',
+    //       file: file._id,
+    //       readers: [{ userId: userId, readAt: new Date() }],
+    //       metadata: { status: 'processing' } // 처리 중 상태를 메타데이터에 추가
+    //     });
+    //     await tempMessage.save();
+    //     tempMessageId = tempMessage._id; // 나중에 최종 메시지에서 사용할 ID 저장
+
+    //     // populate하여 프론트엔드로 전송
+    //     const populatedTempMessage = await Message.findById(tempMessageId)
+    //       .populate('sender', 'name profileImage')
+    //       .populate('file'); // 아직 file.url은 비어있음
+          
+    //     // [수정] 이벤트 이름을 프론트엔드와 일치하는 'message'로 변경
+    //     io.to(roomId).emit('message', populatedTempMessage);
+
+    //     // 2. 파일 상태 및 최종 URL을 생성하고 DB에 저장합니다.
+    //     file.status = 'completed';
+    //     const cloudfrontUrl = process.env.CLOUDFRONT_URL;
+    //     if (cloudfrontUrl) {
+    //       const publicPath = file.s3Key.startsWith('files/') ? file.s3Key.substring(6) : file.s3Key;
+    //       const cleanCloudFrontUrl = cloudfrontUrl.endsWith('/') ? cloudfrontUrl.slice(0, -1) : cloudfrontUrl;
+    //       file.url = `${cleanCloudFrontUrl}/${publicPath}`;
+    //     } else {
+    //       file.url = `https://s3.${process.env.AWS_REGION}.amazonaws.com/${process.env.S3_BUCKET_NAME}/${file.s3Key}`;
+    //     }
+    //     await file.save();
+
+    //     // 3. 임시 메시지의 상태를 'completed'로 업데이트합니다.
+    //     await Message.updateOne({ _id: tempMessageId }, { $set: { 'metadata.status': 'completed' } });
+
+    //     // 4. 최종적으로 URL이 포함된 완전한 메시지를 다시 전송하여 클라이언트의 상태를 업데이트합니다.
+    //     const finalMessage = await Message.findById(tempMessageId)
+    //       .populate('sender', 'name profileImage') // [수정] username -> name
+    //       .populate({
+    //           path: 'file',
+    //           select: 'url originalname mimetype size s3Key' // 필요한 모든 필드 명시
+    //         });
+
+    //     // [수정] 이벤트 이름을 프론트엔드와 일치하는 'message'로 변경
+    //     io.to(roomId).emit('message', finalMessage);
+    //     console.log(`[Socket] 파일 메시지 최종 전송 완료: room=${roomId}, fileId=${fileId}`);
+
+    //   } catch (error) {
+    //     console.error('[Socket] Error during fileUploadComplete:', error);
+    //     // 에러 발생 시 임시 메시지를 삭제하거나 에러 상태로 업데이트할 수 있습니다.
+    //     if (tempMessageId) {
+    //         await Message.deleteOne({ _id: tempMessageId });
+    //         // 클라이언트에게도 메시지 삭제를 알릴 수 있습니다.
+    //         io.to(roomId).emit('messageDeleted', { messageId: tempMessageId });
+    //     }
+    //     socket.emit('error', { message: '서버 내부 오류로 파일 처리에 실패했습니다.' });
+    //   }
+    // });
+
+
+    socket.on('fileUploadComplete', async (data) => {
+  const { fileId, roomId, content } = data;
+  const userId = socket.user.id;
+
+  let tempMessageId = null;
+
+  try {
+    const file = await File.findById(fileId);
+    if (!file || file.uploader.toString() !== userId) {
+      socket.emit('error', { message: '파일 처리 권한이 없습니다.' });
+      return;
+    }
+
+    // 1) 임시 메시지 생성 & 전송
+    const tempMessage = await new Message({
+      room: roomId,
+      sender: userId,
+      type: 'file',
+      content: content || '',
+      file: file._id,
+      readers: [{ userId, readAt: new Date() }],
+      metadata: { status: 'processing' }
+    }).save();
+
+    tempMessageId = tempMessage._id;
+
+    const populatedTempMessage = await Message.findById(tempMessageId)
+      .populate('sender', 'name profileImage')
+      .populate('file');
+
+    io.to(roomId).emit('message', populatedTempMessage);
+
+    // 2) 파일 URL을 CloudFront 기준으로 업데이트
+    const cloudfrontUrl = process.env.CLOUDFRONT_URL?.trim();
+    let newUrl;
+    if (cloudfrontUrl) {
+      const publicPath = file.s3Key.startsWith('files/')
+        ? file.s3Key.substring(6)
+        : file.s3Key;
+      const cleanCloudFrontUrl = cloudfrontUrl.endsWith('/')
+        ? cloudfrontUrl.slice(0, -1)
+        : cloudfrontUrl;
+      newUrl = `${cleanCloudFrontUrl}/${publicPath}`;
+    } else {
+      newUrl = `https://s3.${process.env.AWS_REGION}.amazonaws.com/${process.env.S3_BUCKET_NAME}/${file.s3Key}`;
+    }
+
+    const updatedFile = await File.findByIdAndUpdate(
+      file._id,
+      { $set: { status: 'completed', url: newUrl } },
+      { new: true, projection: 'url originalname mimetype size s3Key status' }
+    );
+
+    // 3) 임시 메시지 상태 completed로 변경 (new: true로 최신 메시지 받기보단 lean 후 수동 삽입)
+    await Message.updateOne(
+      { _id: tempMessageId },
+      { $set: { 'metadata.status': 'completed' } }
+    );
+
+    // 4) 최종 메시지 재전송 (file을 수동으로 최신값으로 꽂아 넣음)
+    const finalMessage = await Message.findById(tempMessageId)
+      .populate('sender', 'name profileImage')
+      .lean();
+
+    finalMessage.file = updatedFile; // 최신 file 직접 삽입
+
+    // 클라이언트에서 같은 _id 메시지를 갱신하도록 별도 이벤트 사용을 권장
+    io.to(roomId).emit('messageUpdated', finalMessage);
+
+    console.log(`[Socket] 파일 메시지 최종 전송 완료: room=${roomId}, fileId=${fileId}, url=${updatedFile.url}`);
+
+  } catch (error) {
+    console.error('[Socket] Error during fileUploadComplete:', error);
+    if (tempMessageId) {
+      await Message.deleteOne({ _id: tempMessageId });
+      io.to(roomId).emit('messageDeleted', { messageId: tempMessageId });
+    }
+    socket.emit('error', { message: '서버 내부 오류로 파일 처리에 실패했습니다.' });
+  }
+});
+
+
   });
 
   // AI 멘션 추출 함수
   function extractAIMentions(content) {
     if (!content) return [];
     
-    const aiTypes = ['wayneAI', 'consultingAI'];
+    const aiTypes = ['wayneAI', 'consultingAI', 'davinciAI'];
     const mentions = new Set();
-    const mentionRegex = /@(wayneAI|consultingAI)\b/g;
+    const mentionRegex = /@(wayneAI|consultingAI|davinciAI)\b/g;
     let match;
     
     while ((match = mentionRegex.exec(content)) !== null) {
@@ -968,6 +1233,90 @@ module.exports = function(io) {
         error: error.message
       });
     }
+  }
+  async function getOrCreateAIUser(aiName) {
+    let email, displayName;
+    switch (aiName) {
+      case 'consultingAI':
+        email       = 'ai@consulting.ai';
+        displayName = 'Consulting AI';
+        break;
+      case 'davinciAI':
+        email       = 'ai@davinci.ai';
+        displayName = 'Davinci AI';
+        break;
+      default:
+        email       = 'ai@wayne.ai';
+        displayName = 'Wayne AI';
+    }
+
+    let aiUser = await User.findOne({ email });
+    if (aiUser) return aiUser;
+
+    // 생성 시 필요한 다른 필드(schema에 따라 조정)
+    aiUser = await User.create({
+      name:         displayName,  // 실제 User 스키마 필드명에 맞춰주세요
+      email,
+      password: '123vasda4',// password나 다른 required 필드가 있다면, 더미 값으로 채워주셔야 합니다.
+      isAI:         true,
+      profileImage: null
+    });
+    return aiUser;
+  }
+
+  async function sendAIImageAsFileNoUpload(io, room, aiName, imageUrl) {
+    // ── 0) AI User 확보 ──
+    const aiUser = await getOrCreateAIUser(aiName);
+
+    // ── 1) publicPath → s3Key 계산 ──
+    const cf = process.env.CLOUDFRONT_URL?.replace(/\/$/, '');
+    let publicPath;
+    if (cf && imageUrl.startsWith(`${cf}/`)) {
+      publicPath = imageUrl.slice(cf.length + 1);
+    } else {
+      publicPath = new URL(imageUrl).pathname.replace(/^\//, '');
+    }
+    const s3Key = `files/${publicPath}`;
+
+    // ── 2) File 문서 생성 ──
+    const fileDoc = await File.create({
+      room,                                  // required
+      uploader:     aiUser._id,              // ObjectId
+      originalName: publicPath.split('/').pop(), // required
+      mimeType:     'image/png',             // required
+      size:         0,                       // required (0 or any)
+      s3Key,
+      status:       'completed',
+      url:          imageUrl
+    });
+
+    // ── 3) 임시 메시지 (“processing”) ──
+    const temp = await new Message({
+      room,
+      sender: aiUser._id,    // frontend participants 에서 _id 로 매칭
+      type:   'file',
+      content: '',
+      file:    fileDoc._id,
+      readers: [],
+      metadata:{ status:'processing' },
+      timestamp: new Date()
+    }).save();
+
+    const popTemp = await Message.findById(temp._id)
+      .populate('sender','name profileImage')
+      .populate('file','url originalName mimeType size');
+    io.to(room).emit('message', popTemp);
+
+    // ── 4) completed 로 업데이트 & messageUpdated ──
+    await Message.updateOne(
+      { _id: temp._id },
+      { $set: { 'metadata.status':'completed' } }
+    );
+    const finalMsg = await Message.findById(temp._id)
+      .populate('sender','name profileImage')
+      .lean();
+    finalMsg.file = fileDoc;
+    io.to(room).emit('messageUpdated', finalMsg);
   }
 
   return io;

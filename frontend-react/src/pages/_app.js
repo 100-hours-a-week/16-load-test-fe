@@ -33,11 +33,12 @@ function MyApp({ Component, pageProps }) {
     return null;
   }
 
-  const showNavbar = !['/', '/register'].includes(router.pathname);
+  // const showNavbar = !['/', '/register'].includes(router.pathname);
 
   return (
     <ThemeProvider config={themeConfig}>
-      {showNavbar && <Navbar />}
+      {/* {showNavbar && <Navbar />} */}
+      {<Navbar />}
       <Component {...pageProps} />
     </ThemeProvider>
   );
