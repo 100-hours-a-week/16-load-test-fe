@@ -3,6 +3,7 @@ const Room = require('../models/Room');
 const User = require('../models/User');
 const File = require('../models/File');
 const jwt = require('jsonwebtoken');
+const axios = require('axios');
 const { jwtSecret } = require('../config/keys');
 const redisClient = require('../utils/redisClient');
 const SessionService = require('../services/sessionService');
@@ -651,6 +652,8 @@ module.exports = function(io) {
             if (ai === 'davinciAI') {
               const drawingPayload = await aiService.createDrawingPrompt(query);
               console.log('drawingPayload:', drawingPayload.promptText);
+              const img_url = await aiService.genimg(drawingPayload);
+              sendAIImageAsFileNoUpload(io, room, 'davinciAI', img_url);
               break;
             }
             await handleAIResponse(io, room, ai, query);
@@ -1085,9 +1088,9 @@ module.exports = function(io) {
   function extractAIMentions(content) {
     if (!content) return [];
     
-    const aiTypes = ['wayneAI', 'consultingAI'];
+    const aiTypes = ['wayneAI', 'consultingAI', 'davinciAI'];
     const mentions = new Set();
-    const mentionRegex = /@(wayneAI|consultingAI)\b/g;
+    const mentionRegex = /@(wayneAI|consultingAI|davinciAI)\b/g;
     let match;
     
     while ((match = mentionRegex.exec(content)) !== null) {
@@ -1230,6 +1233,90 @@ module.exports = function(io) {
         error: error.message
       });
     }
+  }
+  async function getOrCreateAIUser(aiName) {
+    let email, displayName;
+    switch (aiName) {
+      case 'consultingAI':
+        email       = 'ai@consulting.ai';
+        displayName = 'Consulting AI';
+        break;
+      case 'davinciAI':
+        email       = 'ai@davinci.ai';
+        displayName = 'Davinci AI';
+        break;
+      default:
+        email       = 'ai@wayne.ai';
+        displayName = 'Wayne AI';
+    }
+
+    let aiUser = await User.findOne({ email });
+    if (aiUser) return aiUser;
+
+    // 생성 시 필요한 다른 필드(schema에 따라 조정)
+    aiUser = await User.create({
+      name:         displayName,  // 실제 User 스키마 필드명에 맞춰주세요
+      email,
+      password: '123vasda4',// password나 다른 required 필드가 있다면, 더미 값으로 채워주셔야 합니다.
+      isAI:         true,
+      profileImage: null
+    });
+    return aiUser;
+  }
+
+  async function sendAIImageAsFileNoUpload(io, room, aiName, imageUrl) {
+    // ── 0) AI User 확보 ──
+    const aiUser = await getOrCreateAIUser(aiName);
+
+    // ── 1) publicPath → s3Key 계산 ──
+    const cf = process.env.CLOUDFRONT_URL?.replace(/\/$/, '');
+    let publicPath;
+    if (cf && imageUrl.startsWith(`${cf}/`)) {
+      publicPath = imageUrl.slice(cf.length + 1);
+    } else {
+      publicPath = new URL(imageUrl).pathname.replace(/^\//, '');
+    }
+    const s3Key = `files/${publicPath}`;
+
+    // ── 2) File 문서 생성 ──
+    const fileDoc = await File.create({
+      room,                                  // required
+      uploader:     aiUser._id,              // ObjectId
+      originalName: publicPath.split('/').pop(), // required
+      mimeType:     'image/png',             // required
+      size:         0,                       // required (0 or any)
+      s3Key,
+      status:       'completed',
+      url:          imageUrl
+    });
+
+    // ── 3) 임시 메시지 (“processing”) ──
+    const temp = await new Message({
+      room,
+      sender: aiUser._id,    // frontend participants 에서 _id 로 매칭
+      type:   'file',
+      content: '',
+      file:    fileDoc._id,
+      readers: [],
+      metadata:{ status:'processing' },
+      timestamp: new Date()
+    }).save();
+
+    const popTemp = await Message.findById(temp._id)
+      .populate('sender','name profileImage')
+      .populate('file','url originalName mimeType size');
+    io.to(room).emit('message', popTemp);
+
+    // ── 4) completed 로 업데이트 & messageUpdated ──
+    await Message.updateOne(
+      { _id: temp._id },
+      { $set: { 'metadata.status':'completed' } }
+    );
+    const finalMsg = await Message.findById(temp._id)
+      .populate('sender','name profileImage')
+      .lean();
+    finalMsg.file = fileDoc;
+    io.to(room).emit('messageUpdated', finalMsg);
   }
 
   return io;

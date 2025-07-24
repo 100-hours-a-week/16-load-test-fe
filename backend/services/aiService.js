@@ -1,5 +1,7 @@
 const axios = require('axios');
 const { openaiApiKey } = require('../config/keys');
+const airedis = require('../utils/redisBrix');
+const { randomUUID } = require('crypto');
 
 class AIService {
   constructor() {
@@ -157,13 +159,26 @@ class AIService {
     console.log(`Generated prompt: ${promptText}`);
 
     const payload = {
-      id: `prompt-${Date.now()}`,
+      id: randomUUID(),
       userMessage,
       promptText: `MSPaint drawing of ${promptText}`,
-      createdAt: new Date().toISOString()
     };
 
     return payload;
+  }
+
+  async genimg(payload) {
+    const client = await airedis.getClient();
+    await client.rPush(`waiting:davinci`, JSON.stringify(payload));
+    const completionQueue = `completed:davinci:${payload.id}`;
+
+    const result = await client.blPop(completionQueue, 0);
+    if (!result) {
+      throw new Error('Blpop failed');
+    }
+    const img_url = result.element;
+
+    return img_url;
   }
 }
 
