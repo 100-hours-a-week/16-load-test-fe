@@ -25,11 +25,12 @@ const WithoutAuthRegister = withoutAuth(Register);
 function AppRouter() {
   // 로그인 여부에 따라 Navbar를 보여주기 위한 로직
   // 실제로는 useLocation 훅을 사용해야 하지만, 여기서는 간단히 표현
-  const showNavbar = !['/', '/register'].includes(window.location.pathname);
+  // const showNavbar = !['/', '/register'].includes(window.location.pathname);
 
   return (
     <BrowserRouter>
-      {showNavbar && <Navbar />}
+      {/* {showNavbar && <Navbar />} */}
+      {<Navbar />}
       <Routes>
         <Route path="/" element={<WithoutAuthLogin />} />
         <Route path="/login" element={<WithoutAuthLogin />} />
