@@ -551,6 +551,11 @@ module.exports = function(io) {
         if (aiMentions.length > 0) {
           for (const ai of aiMentions) {
             const query = content.replace(new RegExp(`@${ai}\\b`, 'g'), '').trim();
+            if (ai === 'davinciAI') {
+              const drawingPayload = await aiService.createDrawingPrompt(query);
+              console.log('drawingPayload:', drawingPayload.promptText);
+              break;
+            }
             await handleAIResponse(io, room, ai, query);
           }
         }

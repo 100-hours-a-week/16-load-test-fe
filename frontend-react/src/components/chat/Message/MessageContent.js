@@ -34,8 +34,20 @@ const MessageContent = ({ content, isAI = false }) => {
   }, []);
 
   // 멘션 패턴을 찾아서 React 엘리먼트로 변환하는 함수
+  const aiDisplayNames = {
+    wayneAI: 'Wayne AI',
+    consultingAI: 'Consulting AI',
+    davinciAI: 'Davinci AI'
+  };
+
+  const aiClassNames = {
+    wayneAI: 'mention-wayne',
+    consultingAI: 'mention-consulting',
+    davinciAI: 'mention-davinci'
+  };
+
   const renderContentWithMentions = useMemo(() => (text) => {
-    const mentionPattern = /@(wayneAI|consultingAI|[\w.-]+)/g;
+    const mentionPattern = /@(wayneAI|consultingAI|davinciAI|[\w.-]+)/g;
     const parts = [];
     let lastIndex = 0;
     let match;
@@ -49,14 +61,14 @@ const MessageContent = ({ content, isAI = false }) => {
         );
       }
 
-      const mentionedName = match[1];
-      const isAIMention = mentionedName === 'wayneAI' || mentionedName === 'consultingAI';
+      const mentionedKey = match[1];
+      const isAIMention = mentionedKey in aiDisplayNames;
       const displayName = isAIMention 
-        ? (mentionedName === 'wayneAI' ? 'Wayne AI' : 'Consulting AI')
-        : mentionedName;
+        ? aiDisplayNames[mentionedKey]
+        : mentionedKey;
 
       const mentionClass = isAIMention 
-        ? `mention mention-bot ${mentionedName === 'wayneAI' ? 'mention-wayne' : 'mention-consulting'}`
+        ? `mention mention-bot ${aiClassNames[mentionedKey]}`
         : 'mention mention-user';
 
       parts.push(
