@@ -94,10 +94,6 @@ const FileMessage = ({
   };
 
   const renderImagePreview = (originalname) => {
-    console.log(previewUrl);
-    console.log(originalname);
-    console.log("ㅇㄴㅁㄹㅇㄹㄴㅇㅇ");
-    // [핵심 수정]
     // previewUrl이 없는 경우(파일 처리 중) 로딩 상태를 보여줍니다.
     if (!previewUrl) {
       return (
@@ -125,6 +121,7 @@ const FileMessage = ({
     const mimetype = msg.file?.mimeType || '';
     const originalname = getDecodedFilename(msg.file?.originalName || 'Unknown File');
     const size = fileService.formatFileSize(msg.file?.size || 0);
+
 
     const FileActions = () => (
       <div className="file-actions mt-2 pt-2 border-t border-gray-700">
