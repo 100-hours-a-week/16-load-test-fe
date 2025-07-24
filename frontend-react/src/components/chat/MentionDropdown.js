@@ -75,9 +75,30 @@ const MentionDropdown = ({
     );
   }, []);
 
+  const getDisplayName = useCallback((user) => {
+    if (user.isAI) {
+      switch (user.name) {
+        case 'consultingAI':
+          return 'Consulting AI';
+        case 'davinciAI':
+          return 'Davinci AI';
+        default:
+          return 'Wayne AI';
+      }
+    }
+    return user.name;
+  }, []);
+  
   const getAvatarContent = useCallback((user) => {
     if (user.isAI) {
-      return user.name === 'wayneAI' ? 'W' : 'C';
+      switch (user.name) {
+        case 'consultingAI':
+          return 'C';
+        case 'davinciAI':
+          return 'D';
+        default:
+          return 'W';
+      }
     }
     return user.name.charAt(0).toUpperCase();
   }, []);
@@ -126,7 +147,7 @@ const MentionDropdown = ({
             
             <div className="mention-info">
               <span className="mention-name">
-                {user.isAI ? (user.name === 'wayneAI' ? 'Wayne AI' : 'Consulting AI') : user.name}
+                {getDisplayName(user)}
               </span>
               {renderUserBadge(user)}
             </div>
