@@ -1,5 +1,5 @@
 // src/Router.js
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, useLocation } from 'react-router-dom';
 import Login from './pages/login'; // pages 폴더를 src 아래로 옮겼다고 가정
 import Register from './pages/register';
 import ChatRooms from './pages/chat-rooms';
@@ -21,16 +21,13 @@ const AuthProfile = withAuth(Profile);
 const WithoutAuthLogin = withoutAuth(Login);
 const WithoutAuthRegister = withoutAuth(Register);
 
-
-function AppRouter() {
-  // 로그인 여부에 따라 Navbar를 보여주기 위한 로직
-  // 실제로는 useLocation 훅을 사용해야 하지만, 여기서는 간단히 표현
-  // const showNavbar = !['/', '/register'].includes(window.location.pathname);
+function RouterContent() {
+  const location = useLocation();
+  const showNavbar = !['/', '/register'].includes(location.pathname);
 
   return (
-    <BrowserRouter>
-      {/* {showNavbar && <Navbar />} */}
-      {<Navbar />}
+    <>
+      {showNavbar && <Navbar />}
       <Routes>
         <Route path="/" element={<WithoutAuthLogin />} />
         <Route path="/login" element={<WithoutAuthLogin />} />
@@ -39,9 +36,15 @@ function AppRouter() {
         <Route path="/chat-rooms/new" element={<AuthNewChatRoom />} />
         <Route path="/chat" element={<AuthChatPage />} />
         <Route path="/profile" element={<AuthProfile />} />
-        {/* 404 Not Found 페이지도 설정할 수 있습니다. */}
-        {/* <Route path="*" element={<NotFound />} /> */}
       </Routes>
+    </>
+  );
+}
+
+function AppRouter() {
+  return (
+    <BrowserRouter>
+      <RouterContent />
     </BrowserRouter>
   );
 }
