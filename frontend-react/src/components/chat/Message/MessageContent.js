@@ -34,20 +34,8 @@ const MessageContent = ({ content, isAI = false }) => {
   }, []);
 
   // 멘션 패턴을 찾아서 React 엘리먼트로 변환하는 함수
-  const aiDisplayNames = {
-    wayneAI: 'Wayne AI',
-    consultingAI: 'Consulting AI',
-    davinciAI: 'Davinci AI'
-  };
-
-  const aiClassNames = {
-    wayneAI: 'mention-wayne',
-    consultingAI: 'mention-consulting',
-    davinciAI: 'mention-davinci'
-  };
-
   const renderContentWithMentions = useMemo(() => (text) => {
-    const mentionPattern = /@(wayneAI|consultingAI|davinciAI|[\w.-]+)/g;
+    const mentionPattern = /@(wayneAI|consultingAI|[\w.-]+)/g;
     const parts = [];
     let lastIndex = 0;
     let match;
@@ -61,14 +49,14 @@ const MessageContent = ({ content, isAI = false }) => {
         );
       }
 
-      const mentionedKey = match[1];
-      const isAIMention = mentionedKey in aiDisplayNames;
+      const mentionedName = match[1];
+      const isAIMention = mentionedName === 'wayneAI' || mentionedName === 'consultingAI';
       const displayName = isAIMention 
-        ? aiDisplayNames[mentionedKey]
-        : mentionedKey;
+        ? (mentionedName === 'wayneAI' ? 'Wayne AI' : 'Consulting AI')
+        : mentionedName;
 
       const mentionClass = isAIMention 
-        ? `mention mention-bot ${aiClassNames[mentionedKey]}`
+        ? `mention mention-bot ${mentionedName === 'wayneAI' ? 'mention-wayne' : 'mention-consulting'}`
         : 'mention mention-user';
 
       parts.push(
@@ -97,14 +85,14 @@ const MessageContent = ({ content, isAI = false }) => {
   // 마크다운 렌더링을 위한 커스텀 컴포넌트
   const components = useMemo(() => ({
     p: ({ children }) => {
-      // Iterate over children to apply mention rendering only to text nodes
-      const processedChildren = React.Children.map(children, (child, index) => {
-        if (typeof child === 'string') {
-          return <React.Fragment key={index}>{renderContentWithMentions(child)}</React.Fragment>;
-        }
-        return child; // Render other elements (like <a> tags) as is
-      });
-      return <Text typography="body2">{processedChildren}</Text>;
+      if (
+        children.length === 1 && 
+        typeof children[0] === 'string' && 
+        !children[0].includes('\n')
+      ) {
+        return <Text typography="body2">{renderContentWithMentions(children[0])}</Text>;
+      }
+      return <Text typography="body2">{children}</Text>;
     },
     code({ node, inline, className, children, ...props }) {
       const match = /language-(\w+)/.exec(className || '');
@@ -178,7 +166,7 @@ const MessageContent = ({ content, isAI = false }) => {
 
       return (
         <li 
-          className={`md-list-item ${hasCheckbox ? 'list-none' : ''}`}
+          className={`md-list-item ${hasCheckbox ? 'list-none' : ''}`} 
           {...props}
         >
           {children}
@@ -232,8 +220,25 @@ const MessageContent = ({ content, isAI = false }) => {
     )
   }), [renderContentWithMentions, copyToClipboard, copyingMap]);
 
+  // 순수 텍스트 내용 여부 확인
+  const isPlainText = useMemo(() => {
+    return typeof content === 'string' && 
+           !content.includes('```') && 
+           !content.includes('`') && 
+           !content.includes('#') && 
+           !content.includes('*') && 
+           !content.includes('_') && 
+           !content.includes('[') && 
+           !content.includes('|');
+  }, [content]);
+
   if (typeof content !== 'string') {
     return String(content);
+  }
+
+  // 순수 텍스트이면서 멘션이 포함된 경우 직접 렌더링
+  if (isPlainText && content.includes('@')) {
+    return <Text typography="body2" className="message-text">{renderContentWithMentions(content)}</Text>;
   }
 
   // 마크다운 콘텐츠의 경우 ReactMarkdown 사용

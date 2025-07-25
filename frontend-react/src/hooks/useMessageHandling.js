@@ -198,12 +198,6 @@ export const useMessageHandling = (socketRef, currentUser, roomId, handleSession
        email: 'ai@consulting.ai',
        isAI: true
      },
-     {
-      _id: 'davinciAI',
-      name: 'davinciAI',
-      email: 'ai@davinciAI',
-      isAI: true
-     },
      ...room.participants
    ];
 
